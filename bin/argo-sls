@@ -1,0 +1,55 @@
+#!/usr/bin/env ts-node
+
+const nodemon = require('nodemon');
+const yargs = require('yargs');
+
+const server = require(__dirname + '/../dist/index');
+
+const argv = yargs
+  .usage('Usage: $0 [options]')
+  .example('$0', 'start lambda web server')
+  .example('$0 -w -e ts', 'start lambda web server and watch for changes in TypeScript files')
+  .example('$0 --port 8080 --host 0.0.0.0', 'start lambda web server on all interfaces and port 8080')
+  .string('host')
+  .describe('host', 'host to listen on, alternatively use HOST environment variable')
+  .string('port')
+  .describe('port', 'port to listen on, alternatively use PORT environment variable')
+  .string('w')
+  .alias('w', 'watch')
+  .describe('w', 'watch directory or files')
+  .string('e')
+  .alias('e', 'ext')
+  .describe('e', 'extensions to look for, ie. js,jade,hbs')
+  .string('i')
+  .alias('i', 'ignore')
+  .describe('i', 'ignore specific files or directories')
+  .help()
+  .alias('h', 'help')
+  .argv;
+
+if (null != argv.watch) {
+  const exec = [process.argv[1]];
+  if (argv.host) {
+    exec.push('--host', argv.host);
+  }
+  if (argv.port) {
+    exec.push('--port', argv.port);
+  }
+  const nodemonOptions = {
+    ext: argv.ext,
+    ignore: argv.ignore,
+    watch: argv.watch || undefined,
+    exec: exec.join(' '),
+    verbose: true
+  };
+  nodemon(nodemonOptions);
+} else {
+  (async () => {
+    try {
+      await server.start(argv.host, argv.port);
+    } catch (e) {
+      console.error('Unable to start server', e);
+      process.exit(1);
+    }
+  })();
+}
