@@ -1,4 +1,4 @@
-#Argo Serverless Offline
+# Argo Serverless Offline
 
 ```
 Usage: argo-sls [options]
