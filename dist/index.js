@@ -36,9 +36,9 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 var _this = this;
 Object.defineProperty(exports, "__esModule", { value: true });
+var good = require("@hapi/good");
+var Hapi = require("@hapi/hapi");
 var blipp = require("blipp");
-var good = require("good");
-var Hapi = require("hapi");
 var _ = require("lodash");
 var Serverless = require("serverless");
 var createLambdaContext_1 = require("./createLambdaContext");
@@ -211,11 +211,11 @@ var startServer = function (_a) {
                                                 response: '*'
                                             }
                                         ],
-                                        module: 'good-squeeze',
+                                        module: '@hapi/good-squeeze',
                                         name: 'Squeeze'
                                     },
                                     {
-                                        module: 'good-console'
+                                        module: '@hapi/good-console'
                                     },
                                     'stdout'
                                 ]

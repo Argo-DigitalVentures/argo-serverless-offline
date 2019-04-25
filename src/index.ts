@@ -1,6 +1,6 @@
+import * as good from '@hapi/good';
+import * as Hapi from '@hapi/hapi';
 import * as blipp from 'blipp';
-import * as good from 'good';
-import * as Hapi from 'hapi';
 import * as _ from 'lodash';
 import * as Serverless from 'serverless';
 import { createLambdaContext } from './createLambdaContext';
@@ -178,11 +178,11 @@ const startServer = async ({ service, port = 3000, host = 'localhost' }) => {
                 response: '*'
               }
             ],
-            module: 'good-squeeze',
+            module: '@hapi/good-squeeze',
             name: 'Squeeze'
           },
           {
-            module: 'good-console'
+            module: '@hapi/good-console'
           },
           'stdout'
         ]

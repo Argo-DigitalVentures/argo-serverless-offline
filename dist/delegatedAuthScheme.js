@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-var Boom = require("boom");
+var Boom = require("@hapi/boom");
 var authCanExecuteResource_1 = require("./authCanExecuteResource");
 var createLambdaContext_1 = require("./createLambdaContext");
 var createAuthenticateFunction = function (authorizerOptions, options, authFun) {

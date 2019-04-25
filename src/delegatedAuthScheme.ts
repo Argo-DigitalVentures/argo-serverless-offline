@@ -1,4 +1,4 @@
-import * as Boom from 'boom';
+import * as Boom from '@hapi/boom';
 import authCanExecuteResource from './authCanExecuteResource';
 import { createLambdaContext } from './createLambdaContext';
 
