@@ -1,6 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.utils = {
+    // Detect the toString encoding from the request headers content-type
+    // enhance if further content types need to be non utf8 encoded.
+    detectEncoding: function (request) { return typeof request.headers['content-type'] === 'string' && request.headers['content-type'].includes('multipart/form-data') ? 'binary' : 'utf8'; },
     normalizeMultiValueQuery: function (query) {
         // foreach key, ensure that the value is an array
         return Object.keys(query).reduce(function (q, param) {
