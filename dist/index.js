@@ -44,6 +44,7 @@ var Serverless = require("serverless");
 var createLambdaContext_1 = require("./createLambdaContext");
 var createLambdaProxyContext_1 = require("./createLambdaProxyContext");
 var delegatedAuthScheme_1 = require("./delegatedAuthScheme");
+var utils_1 = require("./utils");
 var serverlessOptions = { stage: process.env.STAGE || 'ci' };
 var requireLambdaModule = function (modulePath) { return require(process.cwd() + "/" + modulePath); };
 var parseFunctionPath = function (path) {
@@ -92,13 +93,8 @@ var registerAuthSchemes = function (service, server) {
 };
 var preProcessRequest = function (request) {
     // Payload processing
-    try {
-        if (!(request.payload instanceof String)) {
-            request.payload = JSON.stringify(request.payload);
-        }
-    }
-    catch (e) {
-    }
+    var encoding = utils_1.utils.detectEncoding(request);
+    request.payload = request.payload && request.payload.toString(encoding);
     request.rawPayload = request.payload;
     // Headers processing
     // Hapi lowercases the headers whereas AWS does not
@@ -159,15 +155,19 @@ var registerRoutes = function (service, server) {
             if (!event.http) {
                 return;
             }
-            var _a = event.http, method = _a.method, path = _a.path, authorizer = _a.authorizer;
+            var _a = event.http, _b = _a.method, method = _b === void 0 ? 'get' : _b, path = _a.path, authorizer = _a.authorizer;
             console.info("Registering route for lambda " + functionName + ": " + method + " " + path);
             var route = {
+                config: {},
                 handler: wrapHandler(descriptor, handler),
                 method: method,
                 path: "/" + path
             };
+            if (method.toUpperCase() !== 'HEAD' && method.toUpperCase() !== 'GET') {
+                route.config.payload = { parse: false };
+            }
             if (authorizer) {
-                route.options = { auth: authorizer };
+                route.config.auth = authorizer;
             }
             server.route(route);
         });

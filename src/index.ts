@@ -6,6 +6,7 @@ import * as Serverless from 'serverless';
 import { createLambdaContext } from './createLambdaContext';
 import createLambdaProxyContext from './createLambdaProxyContext';
 import delegatedAuthScheme from './delegatedAuthScheme';
+import { utils } from './utils';
 
 const serverlessOptions = { stage: process.env.STAGE || 'ci' };
 
@@ -60,13 +61,11 @@ const registerAuthSchemes = (service: any, server: Hapi.Server) => {
 
 const preProcessRequest = request => {
   // Payload processing
-  try {
-    if (!(request.payload instanceof String)) {
-      request.payload = JSON.stringify(request.payload);
-    }
-  } catch (e) {
-  }
+  const encoding = utils.detectEncoding(request);
+
+  request.payload = request.payload && request.payload.toString(encoding);
   request.rawPayload = request.payload;
+
   // Headers processing
   // Hapi lowercases the headers whereas AWS does not
   // so we recreate a custom headers object from the raw request
@@ -130,15 +129,19 @@ const registerRoutes = (service: any, server: Hapi.Server) => {
       if (!event.http) {
         return;
       }
-      const { method, path, authorizer } = event.http;
+      const { method = 'get', path, authorizer } = event.http;
       console.info(`Registering route for lambda ${functionName}: ${method} ${path}`);
       const route: Hapi.ServerRoute = {
+        config: {},
         handler: wrapHandler(descriptor, handler),
         method,
         path: `/${path}`
       };
+      if (method.toUpperCase() !== 'HEAD' && method.toUpperCase() !== 'GET') {
+        route.config.payload = { parse: false };
+      }
       if (authorizer) {
-        route.options = { auth: authorizer };
+        route.config.auth = authorizer;
       }
       server.route(route);
     });

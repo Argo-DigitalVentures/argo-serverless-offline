@@ -1,4 +1,8 @@
 export const utils = {
+  // Detect the toString encoding from the request headers content-type
+  // enhance if further content types need to be non utf8 encoded.
+  detectEncoding: request => typeof request.headers['content-type'] === 'string' && request.headers['content-type'].includes(
+    'multipart/form-data') ? 'binary' : 'utf8',
   normalizeMultiValueQuery: query =>
     // foreach key, ensure that the value is an array
     Object.keys(query).reduce((q, param) => {
