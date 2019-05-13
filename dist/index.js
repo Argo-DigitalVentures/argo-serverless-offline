@@ -44,7 +44,9 @@ var Serverless = require("serverless");
 var createLambdaContext_1 = require("./createLambdaContext");
 var createLambdaProxyContext_1 = require("./createLambdaProxyContext");
 var delegatedAuthScheme_1 = require("./delegatedAuthScheme");
+var streamReader_1 = require("./streamReader");
 var utils_1 = require("./utils");
+var stream = new streamReader_1.StreamReader({ interval: Number(process.env.STREAM_READER_INTERVAL) });
 var serverlessOptions = { stage: process.env.STAGE || 'ci' };
 var requireLambdaModule = function (modulePath) { return require(process.cwd() + "/" + modulePath); };
 var parseFunctionPath = function (path) {
@@ -57,6 +59,11 @@ var parseFunctionPath = function (path) {
         modulePath: modulePath
     };
 };
+var getHandler = function (descriptor) {
+    var handlerDescriptor = parseFunctionPath(descriptor.handler);
+    var handlerModule = requireLambdaModule(handlerDescriptor.modulePath);
+    return handlerModule[handlerDescriptor.functionName];
+};
 var registerAuthSchemes = function (service, server) {
     var authorizersMap = {};
     Object.keys(service.functions).forEach(function (functionName) {
@@ -65,19 +72,13 @@ var registerAuthSchemes = function (service, server) {
             return;
         }
         descriptor.events.forEach(function (event) {
-            if (!event.http) {
-                return;
-            }
-            if (event.http.authorizer) {
+            if (event.http && event.http.authorizer) {
                 authorizersMap[event.http.authorizer] = true;
             }
         });
     });
     Object.keys(authorizersMap).forEach(function (functionName) {
-        var authorizerFunctionDescriptor = service.functions[functionName];
-        var handlerDescriptor = parseFunctionPath(authorizerFunctionDescriptor.handler);
-        var handlerModule = requireLambdaModule(handlerDescriptor.modulePath);
-        var handler = handlerModule[handlerDescriptor.functionName];
+        var handler = getHandler(service.functions[functionName]);
         var scheme = function () {
             var authorizerOptions = {
                 identitySource: 'method.request.header.Authorization',
@@ -89,6 +90,21 @@ var registerAuthSchemes = function (service, server) {
         };
         server.auth.scheme(functionName, scheme);
         server.auth.strategy(functionName, functionName);
+    });
+};
+var registerStreams = function (service) {
+    Object.keys(service.functions).forEach(function (functionName) {
+        var descriptor = service.functions[functionName];
+        if (!descriptor.events) {
+            return;
+        }
+        descriptor.events.forEach(function (event) {
+            if (event.stream) {
+                stream.registerHandler(event.stream, getHandler(descriptor), functionName);
+                stream.connect();
+                return;
+            }
+        });
     });
 };
 var preProcessRequest = function (request) {
@@ -189,6 +205,7 @@ var startServer = function (_a) {
                             }
                         }
                     });
+                    registerStreams(service);
                     registerAuthSchemes(service, server);
                     blippPlugin = {
                         options: {
