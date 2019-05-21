@@ -6,7 +6,10 @@ import * as Serverless from 'serverless';
 import { createLambdaContext } from './createLambdaContext';
 import createLambdaProxyContext from './createLambdaProxyContext';
 import delegatedAuthScheme from './delegatedAuthScheme';
+import { StreamReader } from './streamReader';
 import { utils } from './utils';
+
+const stream = new StreamReader({interval: Number(process.env.STREAM_READER_INTERVAL)});
 
 const serverlessOptions = { stage: process.env.STAGE || 'ci' };
 
@@ -23,6 +26,12 @@ const parseFunctionPath = path => {
   };
 };
 
+const getHandler = descriptor => {
+  const handlerDescriptor = parseFunctionPath(descriptor.handler);
+  const handlerModule = requireLambdaModule(handlerDescriptor.modulePath);
+  return handlerModule[handlerDescriptor.functionName];
+};
+
 const registerAuthSchemes = (service: any, server: Hapi.Server) => {
   const authorizersMap = {};
   Object.keys(service.functions).forEach(functionName => {
@@ -31,19 +40,13 @@ const registerAuthSchemes = (service: any, server: Hapi.Server) => {
       return;
     }
     descriptor.events.forEach(event => {
-      if (!event.http) {
-        return;
-      }
-      if (event.http.authorizer) {
+      if (event.http && event.http.authorizer) {
         authorizersMap[event.http.authorizer] = true;
       }
     });
   });
   Object.keys(authorizersMap).forEach(functionName => {
-    const authorizerFunctionDescriptor = service.functions[functionName];
-    const handlerDescriptor = parseFunctionPath(authorizerFunctionDescriptor.handler);
-    const handlerModule = requireLambdaModule(handlerDescriptor.modulePath);
-    const handler = handlerModule[handlerDescriptor.functionName];
+    const handler = getHandler(service.functions[functionName]);
     const scheme = () => {
       const authorizerOptions = {
         identitySource: 'method.request.header.Authorization',
@@ -56,6 +59,22 @@ const registerAuthSchemes = (service: any, server: Hapi.Server) => {
 
     server.auth.scheme(functionName, scheme);
     server.auth.strategy(functionName, functionName);
+  });
+};
+
+const registerStreams = (service: any) => {
+  Object.keys(service.functions).forEach(functionName => {
+    const descriptor = service.functions[functionName];
+    if (!descriptor.events) {
+      return;
+    }
+    descriptor.events.forEach(event => {
+      if (event.stream) {
+        stream.registerHandler(event.stream, getHandler(descriptor), functionName);
+        stream.connect();
+        return;
+      }
+    });
   });
 };
 
@@ -158,6 +177,7 @@ const startServer = async ({ service, port = 3000, host = 'localhost' }) => {
       }
     }
   });
+  registerStreams(service);
   registerAuthSchemes(service, server);
 
   const blippPlugin = {

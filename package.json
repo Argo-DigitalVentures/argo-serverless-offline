@@ -17,6 +17,8 @@
     "@hapi/good-console": "8.1.0",
     "@hapi/good-squeeze": "5.2.0",
     "@hapi/hapi": "18.3.1",
+    "aws-sdk": "2.453.0",
+    "bluebird": "3.5.4",
     "blipp": "3.1.3",
     "jsonwebtoken": "8.5.1",
     "lodash": "4.17.11",
