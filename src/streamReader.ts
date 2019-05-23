@@ -20,7 +20,7 @@ export class StreamReader {
       accessKeyId: process.env.AWS_DYNAMODB_ACCESS_KEY,
       apiVersion: '2012-08-10',
       endpoint: process.env.AWS_DYNAMODB_ENDPOINT,
-      region: process.env.REGION,
+      region: process.env.REGION || 'us-east-1',
       secretAccessKey: process.env.AWS_DYNAMODB_SECRET_ACCESS_KEY
     };
     this.dynamoStream = new DynamoDBStreams(options);
