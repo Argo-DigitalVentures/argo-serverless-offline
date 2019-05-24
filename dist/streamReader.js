@@ -48,7 +48,9 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 Object.defineProperty(exports, "__esModule", { value: true });
 var aws_sdk_1 = require("aws-sdk");
 var Bluebird = require("bluebird");
+var debug_1 = require("debug");
 var _ = require("lodash");
+var log = debug_1.default('serverless-offline:streamReader');
 var StreamReader = /** @class */ (function () {
     function StreamReader(config) {
         var _this = this;
@@ -75,7 +77,7 @@ var StreamReader = /** @class */ (function () {
         };
         this.getStreamsDescribes = function () {
             if (!_this.streams.length) {
-                console.info('Expect streams but dynamoDB returns empty streams table');
+                log('Expect streams but dynamoDB returns empty streams table');
                 return [];
             }
             return Bluebird.map(_this.streams, function (item) { return _this.getDescribes({ StreamArn: item.StreamArn }); });
@@ -97,8 +99,8 @@ var StreamReader = /** @class */ (function () {
         this.getAllRecords = function () {
             var handleGetAllRecordsError = function (e, ShardIterator) { return __awaiter(_this, void 0, void 0, function () {
                 return __generator(this, function (_a) {
-                    console.warn('getAllRecords error:', e);
-                    console.info('INVALID SHARD!', ShardIterator);
+                    log("getAllRecords error: " + e);
+                    log("INVALID SHARD!', " + ShardIterator);
                     return [2 /*return*/, null];
                 });
             }); };
@@ -116,14 +118,15 @@ var StreamReader = /** @class */ (function () {
                 if (!stream || 0 === (stream.Records && stream.Records.length)) {
                     return "Stream for " + streamDefinition.TableName + " not have records";
                 }
-                console.info("Call " + (_this.events[streamDefinition.TableName].length || 0) + " handlers for " + stream.Records.length + " " +
+                log("Call " + (_this.events[streamDefinition.TableName].length || 0) + " handlers for " + stream.Records.length + " " +
                     ("items in " + streamDefinition.TableName + " streams"));
                 stream.Records = _.map(stream.Records, function (record) { return (__assign({}, record, { TableName: streamDefinition.TableName, eventSourceARN: streamDefinition.StreamArn })); });
                 return Bluebird.map(_this.events[streamDefinition.TableName], function (_a) {
                     var handler = _a.handler, functionName = _a.functionName;
                     return new Promise(function (resolve) {
                         return handler(stream, undefined, function (err, success) {
-                            return resolve("HANDLER " + functionName + " for " + streamDefinition.TableName + " END WORK with err: " + err + ", success: " + success);
+                            var status = err ? "error: " + err : "success: " + success;
+                            resolve("HANDLER " + functionName + " for " + streamDefinition.TableName + " END WORK with " + status);
                         });
                     });
                 });
@@ -138,11 +141,11 @@ var StreamReader = /** @class */ (function () {
             });
         }); };
         this.handleError = function (e) {
-            console.info('- - - - - - - - - - E R R O R - - - - - - - - - -');
-            console.warn(e);
+            console.error('- - - - E R R O R - - - -');
+            console.error(e);
             clearInterval(_this.intervalID);
             setTimeout(function () {
-                console.info('RESTART');
+                log('RESTART');
                 _this.connect();
             }, 1000);
             _this.isRunning = false;
@@ -154,9 +157,9 @@ var StreamReader = /** @class */ (function () {
                 .then(_this.getAllRecords)
                 .then(_this.parseStreamData)
                 .then(function (logs) {
-                console.info('- - - - - - - - - - STREAM LOGS - - - - - - - - - -');
-                console.info(logs);
-                console.info('- - - - - - - - - - END LOGS - - - - - - - - - -');
+                log('- - - - L O G S - - - -');
+                log('\n', logs);
+                log('- - - - E  N  D - - - -');
             })
                 .catch(_this.handleError);
         };
@@ -187,7 +190,7 @@ var StreamReader = /** @class */ (function () {
             return;
         }
         this.isRunning = true;
-        console.info('- - - - - - - - - - START - - - - - - - - - -');
+        log('- - - - S T A R T - - - -');
         this.getAllStreams()
             .then(this.getStreamsDescribes)
             .then(this.filterStream)
