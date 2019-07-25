@@ -6,10 +6,12 @@ import * as Serverless from 'serverless';
 import { createLambdaContext } from './createLambdaContext';
 import createLambdaProxyContext from './createLambdaProxyContext';
 import delegatedAuthScheme from './delegatedAuthScheme';
+import { SnsReader } from './snsReader';
 import { StreamReader } from './streamReader';
 import { utils } from './utils';
 
 const stream = new StreamReader({interval: Number(process.env.STREAM_READER_INTERVAL)});
+const sns = new SnsReader({interval: Number(process.env.SNS_READER_INTERVAL)});
 
 const serverlessOptions = { stage: process.env.STAGE || 'ci' };
 
@@ -72,6 +74,22 @@ const registerStreams = (service: any) => {
       if (event.stream) {
         stream.registerHandler(event.stream, getHandler(descriptor), functionName);
         stream.connect();
+        return;
+      }
+    });
+  });
+};
+
+const registerSNSEvents = (service: any) => {
+  Object.keys(service.functions).forEach(functionName => {
+    const descriptor = service.functions[functionName];
+    if (!descriptor.events) {
+      return;
+    }
+    descriptor.events.forEach(event => {
+      if (event.sns) {
+        sns.registerHandler(event.sns, getHandler(descriptor), functionName);
+        sns.connect();
         return;
       }
     });
@@ -178,6 +196,7 @@ const startServer = async ({ service, port = 3000, host = 'localhost' }) => {
     }
   });
   registerStreams(service);
+  registerSNSEvents(service);
   registerAuthSchemes(service, server);
 
   const blippPlugin = {

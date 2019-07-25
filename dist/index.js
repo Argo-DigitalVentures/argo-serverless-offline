@@ -44,9 +44,11 @@ var Serverless = require("serverless");
 var createLambdaContext_1 = require("./createLambdaContext");
 var createLambdaProxyContext_1 = require("./createLambdaProxyContext");
 var delegatedAuthScheme_1 = require("./delegatedAuthScheme");
+var snsReader_1 = require("./snsReader");
 var streamReader_1 = require("./streamReader");
 var utils_1 = require("./utils");
 var stream = new streamReader_1.StreamReader({ interval: Number(process.env.STREAM_READER_INTERVAL) });
+var sns = new snsReader_1.SnsReader({ interval: Number(process.env.SNS_READER_INTERVAL) });
 var serverlessOptions = { stage: process.env.STAGE || 'ci' };
 var requireLambdaModule = function (modulePath) { return require(process.cwd() + "/" + modulePath); };
 var parseFunctionPath = function (path) {
@@ -102,6 +104,21 @@ var registerStreams = function (service) {
             if (event.stream) {
                 stream.registerHandler(event.stream, getHandler(descriptor), functionName);
                 stream.connect();
+                return;
+            }
+        });
+    });
+};
+var registerSNSEvents = function (service) {
+    Object.keys(service.functions).forEach(function (functionName) {
+        var descriptor = service.functions[functionName];
+        if (!descriptor.events) {
+            return;
+        }
+        descriptor.events.forEach(function (event) {
+            if (event.sns) {
+                sns.registerHandler(event.sns, getHandler(descriptor), functionName);
+                sns.connect();
                 return;
             }
         });
@@ -206,6 +223,7 @@ var startServer = function (_a) {
                         }
                     });
                     registerStreams(service);
+                    registerSNSEvents(service);
                     registerAuthSchemes(service, server);
                     blippPlugin = {
                         options: {
