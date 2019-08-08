@@ -7,11 +7,13 @@ import { createLambdaContext } from './createLambdaContext';
 import createLambdaProxyContext from './createLambdaProxyContext';
 import delegatedAuthScheme from './delegatedAuthScheme';
 import { SnsReader } from './snsReader';
+import { SqsReader } from './sqsReader';
 import { StreamReader } from './streamReader';
 import { utils } from './utils';
 
-const stream = new StreamReader({interval: Number(process.env.STREAM_READER_INTERVAL)});
-const sns = new SnsReader({interval: Number(process.env.SNS_READER_INTERVAL)});
+const stream = new StreamReader({ interval: Number(process.env.STREAM_READER_INTERVAL) });
+const sns = new SnsReader({ interval: Number(process.env.SNS_READER_INTERVAL) });
+const sqs = new SqsReader({ interval: Number(process.env.SQS_READER_INTERVAL) });
 
 const serverlessOptions = { stage: process.env.STAGE || 'ci' };
 
@@ -93,6 +95,15 @@ const registerSNSEvents = (service: any) => {
         return;
       }
     });
+  });
+};
+
+const registerSQSEvents = service => {
+  Object.keys(service.functions).forEach(functionName => {
+    const descriptor = service.functions[functionName];
+    if (descriptor.events && descriptor.events.length) {
+      descriptor.events.forEach(event => event.sqs && sqs.registerHandler(event, getHandler(descriptor), functionName));
+    }
   });
 };
 
@@ -197,6 +208,7 @@ const startServer = async ({ service, port = 3000, host = 'localhost' }) => {
   });
   registerStreams(service);
   registerSNSEvents(service);
+  registerSQSEvents(service);
   registerAuthSchemes(service, server);
 
   const blippPlugin = {
