@@ -75,7 +75,6 @@ const registerStreams = (service: any) => {
     descriptor.events.forEach(event => {
       if (event.stream) {
         stream.registerHandler(event.stream, getHandler(descriptor), functionName);
-        stream.connect();
         return;
       }
     });
@@ -207,6 +206,7 @@ const startServer = async ({ service, port = 3000, host = 'localhost' }) => {
     }
   });
   registerStreams(service);
+  stream.connect();
   registerSNSEvents(service);
   registerSQSEvents(service);
   registerAuthSchemes(service, server);

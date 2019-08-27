@@ -105,7 +105,6 @@ var registerStreams = function (service) {
         descriptor.events.forEach(function (event) {
             if (event.stream) {
                 stream.registerHandler(event.stream, getHandler(descriptor), functionName);
-                stream.connect();
                 return;
             }
         });
@@ -233,6 +232,7 @@ var startServer = function (_a) {
                         }
                     });
                     registerStreams(service);
+                    stream.connect();
                     registerSNSEvents(service);
                     registerSQSEvents(service);
                     registerAuthSchemes(service, server);
