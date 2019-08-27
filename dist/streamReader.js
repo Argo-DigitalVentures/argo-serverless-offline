@@ -55,23 +55,39 @@ var StreamReader = /** @class */ (function () {
     function StreamReader(config) {
         var _this = this;
         this.getTableName = function (event) { return event.arn['Fn::GetAtt'][0]; };
-        this.getAllStreams = function (options) {
-            if (options === void 0) { options = {}; }
-            return __awaiter(_this, void 0, void 0, function () {
-                var currentResult;
-                return __generator(this, function (_a) {
-                    switch (_a.label) {
+        this.getTableStreams = function (TableName) {
+            var getStreams = function (options) { return __awaiter(_this, void 0, void 0, function () {
+                var currentResult, _a, _b, _c;
+                return __generator(this, function (_d) {
+                    switch (_d.label) {
                         case 0: return [4 /*yield*/, this.dynamoStream.listStreams(options).promise()];
                         case 1:
-                            currentResult = _a.sent();
-                            // Todo: dynamoStream.listStreams returns 100 elements, for more use options;
-                            // https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_streams_ListStreams.html
-                            this.streams = this.streams.concat(currentResult.Streams);
-                            return [2 /*return*/];
+                            currentResult = _d.sent();
+                            if (!currentResult.LastEvaluatedStreamArn) return [3 /*break*/, 3];
+                            _b = (_a = _).merge;
+                            _c = [currentResult.Streams];
+                            return [4 /*yield*/, getStreams({ ExclusiveStartStreamArn: currentResult.LastEvaluatedStreamArn, TableName: TableName })];
+                        case 2: return [2 /*return*/, _b.apply(_a, _c.concat([_d.sent()]))];
+                        case 3: return [2 /*return*/, currentResult.Streams];
                     }
                 });
-            });
+            }); };
+            return getStreams({ TableName: TableName });
         };
+        this.getAllStreams = function () { return __awaiter(_this, void 0, void 0, function () {
+            var _a, _b, _c;
+            return __generator(this, function (_d) {
+                switch (_d.label) {
+                    case 0:
+                        _a = this;
+                        _c = (_b = _).flatten;
+                        return [4 /*yield*/, Bluebird.map(_.keys(this.events), this.getTableStreams)];
+                    case 1:
+                        _a.streams = _c.apply(_b, [_d.sent()]);
+                        return [2 /*return*/, Promise.resolve()];
+                }
+            });
+        }); };
         this.getDescribes = function (params) {
             return _this.dynamoStream.describeStream(params).promise().then(function (res) { return res.StreamDescription; });
         };
@@ -101,20 +117,24 @@ var StreamReader = /** @class */ (function () {
                 return __generator(this, function (_a) {
                     log("getAllRecords error: " + e);
                     log("INVALID SHARD!', " + ShardIterator);
-                    return [2 /*return*/, null];
+                    return [2 /*return*/, { e: e, ShardIterator: ShardIterator }];
                 });
             }); };
             return Bluebird.map(_this.shards, function (ShardIterator) {
                 return _this.dynamoStream.getRecords({ ShardIterator: ShardIterator })
-                    .promise()
+                    .promise().then(function (data) { return (__assign({}, data, { sourceARN: ShardIterator })); })
                     .catch(function (e) { return handleGetAllRecordsError(e, ShardIterator); });
             });
         };
         this.parseStreamData = function (StreamsData) {
             _this.shards = _.map(StreamsData, function (item) { return item && item.NextShardIterator || null; });
             return Bluebird.map(StreamsData, function (stream) {
-                var arn = StreamReader.getARNFromShardIterator(stream.NextShardIterator);
-                var streamDefinition = _.find(_this.streams, { StreamArn: arn });
+                if (stream.e) {
+                    return;
+                }
+                var StreamArn = StreamReader.getARNFromShardIterator(stream.sourceARN);
+                delete stream.sourceARN;
+                var streamDefinition = _.find(_this.streams, { StreamArn: StreamArn });
                 if (!stream || 0 === (stream.Records && stream.Records.length)) {
                     return "Stream for " + streamDefinition.TableName + " not have records";
                 }
@@ -148,7 +168,6 @@ var StreamReader = /** @class */ (function () {
                 log('RESTART');
                 _this.connect();
             }, 1000);
-            _this.isRunning = false;
             _this.streams = [];
             _this.shards = [];
         };
@@ -166,15 +185,15 @@ var StreamReader = /** @class */ (function () {
         var options = {
             accessKeyId: process.env.AWS_DYNAMODB_ACCESS_KEY,
             apiVersion: '2012-08-10',
-            endpoint: process.env.AWS_DYNAMODB_ENDPOINT,
+            endpoint: process.env.AWS_DYNAMODB_ENDPOINT || 'http://localhost:8000',
             region: process.env.REGION || 'us-east-1',
             secretAccessKey: process.env.AWS_DYNAMODB_SECRET_ACCESS_KEY
         };
         this.dynamoStream = new aws_sdk_1.DynamoDBStreams(options);
         this.events = {};
+        this.eventsRegistered = false;
         this.interval = config.interval || 1000;
         this.streams = [];
-        this.isRunning = false;
     }
     StreamReader.prototype.registerHandler = function (event, handler, functionName) {
         if ('dynamodb' !== event.type) {
@@ -182,14 +201,14 @@ var StreamReader = /** @class */ (function () {
         }
         var tableName = this.getTableName(event);
         this.events[tableName] = this.events[tableName] || [];
-        this.events[tableName].push({ handler: handler, functionName: functionName });
+        this.events[tableName].push({ handler: handler, functionName: functionName, arn: event.arn });
+        this.eventsRegistered = true;
     };
     StreamReader.prototype.connect = function () {
         var _this = this;
-        if (this.isRunning) {
+        if (!this.eventsRegistered) {
             return;
         }
-        this.isRunning = true;
         log('- - - - S T A R T - - - -');
         this.getAllStreams()
             .then(this.getStreamsDescribes)
