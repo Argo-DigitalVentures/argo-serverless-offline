@@ -51,10 +51,18 @@ var Bluebird = require("bluebird");
 var debug_1 = require("debug");
 var _ = require("lodash");
 var log = debug_1.default('serverless-offline:streamReader');
-var StreamReader = /** @class */ (function () {
-    function StreamReader(config) {
+var StreamKnowingStatusCodes = {
+    Reader_EmptyStreams: 'Reader_EmptyStreams',
+    Reader_EmptyActiveStream: 'Reader_EmptyActiveStream',
+    Reader_NextShardIteratorNotExist: 'Reader_NextShardIteratorNotExist',
+    TrimmedDataAccessException: 'TrimmedDataAccessException'
+};
+var ReadStream = /** @class */ (function () {
+    function ReadStream(dynamoStream, interval, tableName) {
         var _this = this;
-        this.getTableName = function (event) { return event.arn['Fn::GetAtt'][0]; };
+        this.addHandler = function (event) {
+            _this.handlers.push(event);
+        };
         this.getTableStreams = function (TableName) {
             var getStreams = function (options) { return __awaiter(_this, void 0, void 0, function () {
                 var currentResult, _a, _b, _c;
@@ -74,153 +82,136 @@ var StreamReader = /** @class */ (function () {
             }); };
             return getStreams({ TableName: TableName });
         };
-        this.getAllStreams = function () { return __awaiter(_this, void 0, void 0, function () {
-            var _a, _b, _c;
-            return __generator(this, function (_d) {
-                switch (_d.label) {
-                    case 0:
-                        _a = this;
-                        _c = (_b = _).flatten;
-                        return [4 /*yield*/, Bluebird.map(_.keys(this.events), this.getTableStreams)];
-                    case 1:
-                        _a.streams = _c.apply(_b, [_d.sent()]);
-                        return [2 /*return*/, Promise.resolve()];
-                }
-            });
-        }); };
+        this.getStreamsDescribes = function (streams) {
+            if (!streams.length) {
+                throw ({
+                    message: "Expecting streams but dynamoDB returns empty streams table, could " + _this.tableName + " table has been created?",
+                    code: StreamKnowingStatusCodes.Reader_EmptyStreams
+                });
+            }
+            return Bluebird.map(streams, function (item) { return _this.getDescribes({ StreamArn: item.StreamArn }); });
+        };
         this.getDescribes = function (params) {
             return _this.dynamoStream.describeStream(params).promise().then(function (res) { return res.StreamDescription; });
         };
-        this.getStreamsDescribes = function () {
-            if (!_this.streams.length) {
-                log('Expect streams but dynamoDB returns empty streams table');
-                return [];
-            }
-            return Bluebird.map(_this.streams, function (item) { return _this.getDescribes({ StreamArn: item.StreamArn }); });
-        };
         this.filterStream = function (streams) {
-            var tables = _.keys(_this.events);
-            return _.filter(streams, function (item) { return 'ENABLED' === item.StreamStatus && tables.includes(item.TableName); });
+            return _.filter(streams, { StreamStatus: 'ENABLED' });
         };
-        this.getShardIterators = function (data) {
-            return Bluebird.map(data, function (StreamDescription) { return _this.dynamoStream.getShardIterator({
-                ShardId: StreamDescription.Shards[0].ShardId,
+        this.getShardIterator = function () {
+            return _this.dynamoStream.getShardIterator({
+                ShardId: _this.activeStream.Shards[0].ShardId,
                 ShardIteratorType: 'TRIM_HORIZON',
-                StreamArn: StreamDescription.StreamArn
-            }).promise(); });
+                StreamArn: _this.activeStream.StreamArn
+            }).promise();
         };
-        this.saveShards = function (shards) {
-            _this.shards = _.map(shards, function (shard) { return shard.ShardIterator; });
-        };
-        this.getAllRecords = function () {
-            var handleGetAllRecordsError = function (e, ShardIterator) { return __awaiter(_this, void 0, void 0, function () {
-                return __generator(this, function (_a) {
-                    log("getAllRecords error: " + e);
-                    log("INVALID SHARD!', " + ShardIterator);
-                    return [2 /*return*/, { e: e, ShardIterator: ShardIterator }];
-                });
-            }); };
-            return Bluebird.map(_this.shards, function (ShardIterator) {
-                return _this.dynamoStream.getRecords({ ShardIterator: ShardIterator })
-                    .promise().then(function (data) { return (__assign({}, data, { sourceARN: ShardIterator })); })
-                    .catch(function (e) { return handleGetAllRecordsError(e, ShardIterator); });
-            });
+        this.getAllRecords = function (ShardIterator) {
+            return _this.dynamoStream.getRecords({ ShardIterator: ShardIterator }).promise()
+                .then(function (data) { return (__assign({}, data, { sourceARN: ShardIterator })); });
         };
         this.parseStreamData = function (StreamsData) {
-            _this.shards = _.map(StreamsData, function (item) { return item && item.NextShardIterator || null; });
-            return Bluebird.map(StreamsData, function (stream) {
-                if (stream.e) {
-                    return;
-                }
-                var StreamArn = StreamReader.getARNFromShardIterator(stream.sourceARN);
-                delete stream.sourceARN;
-                var streamDefinition = _.find(_this.streams, { StreamArn: StreamArn });
-                if (!stream || 0 === (stream.Records && stream.Records.length)) {
-                    return "Stream for " + streamDefinition.TableName + " not have records";
-                }
-                log("Call " + (_this.events[streamDefinition.TableName].length || 0) + " handlers for " + stream.Records.length + " " +
-                    ("items in " + streamDefinition.TableName + " streams"));
-                stream.Records = _.map(stream.Records, function (record) { return (__assign({}, record, { TableName: streamDefinition.TableName, eventSourceARN: streamDefinition.StreamArn })); });
-                return Bluebird.map(_this.events[streamDefinition.TableName], function (_a) {
-                    var handler = _a.handler, functionName = _a.functionName;
-                    return new Promise(function (resolve) {
-                        return handler(stream, undefined, function (err, success) {
-                            var status = err ? "error: " + err : "success: " + success;
-                            resolve("HANDLER " + functionName + " for " + streamDefinition.TableName + " END WORK with " + status);
-                        });
+            _this.nextShardIterator = StreamsData.NextShardIterator || 'NotExist';
+            delete StreamsData.sourceARN;
+            if (!StreamsData || 0 === (StreamsData.Records && StreamsData.Records.length)) {
+                return "Stream for " + _this.tableName + " not have records";
+            }
+            log("Call " + (_this.handlers.length || 0) + " handlers for " + StreamsData.Records.length + " items in " + _this.tableName + " streams");
+            StreamsData.Records = _.map(StreamsData.Records, function (record) { return (__assign({}, record, { TableName: _this.tableName, eventSourceARN: _this.activeStream.StreamArn })); });
+            return Bluebird.map(_this.handlers, function (_a) {
+                var handler = _a.handler, functionName = _a.functionName;
+                return new Promise(function (resolve) {
+                    return handler(StreamsData, undefined, function (err, success) {
+                        var status = err ? "error: " + err : "success: " + success;
+                        console.info("HANDLER " + functionName + " for " + _this.tableName + " END WORK with " + status);
+                        resolve();
                     });
                 });
             });
         };
-        this.checkShards = function () { return __awaiter(_this, void 0, void 0, function () {
-            return __generator(this, function (_a) {
-                if (-1 !== _.findIndex(this.shards, function (i) { return null === i; })) {
-                    throw new Error('Some Shards are invalid');
-                }
-                return [2 /*return*/];
-            });
-        }); };
-        this.handleError = function (e) {
-            console.error('- - - - E R R O R - - - -');
-            console.error(e);
-            clearInterval(_this.intervalID);
-            setTimeout(function () {
-                log('RESTART');
-                _this.connect();
-            }, 1000);
-            _this.streams = [];
-            _this.shards = [];
+        this.getAndParseStreamData = function () {
+            if (_this.nextShardIterator === 'NotExist') {
+                return Promise.reject({
+                    message: 'nextShardIterator not exist',
+                    code: StreamKnowingStatusCodes.Reader_NextShardIteratorNotExist
+                });
+            }
+            return _this.getAllRecords(_this.nextShardIterator)
+                .then(_this.parseStreamData);
         };
-        this.getStreamData = function () {
-            _this.checkShards()
-                .then(_this.getAllRecords)
-                .then(_this.parseStreamData)
-                .then(function (logs) {
-                log('- - - - L O G S - - - -');
-                log('\n', logs);
-                log('- - - - E  N  D - - - -');
+        this.start = function () {
+            log("- - - - S T A R T (" + _this.tableName + ")- - - -");
+            _this.getTableStreams(_this.tableName)
+                .then(_this.getStreamsDescribes)
+                .then(_this.filterStream)
+                .then(function (streams) {
+                if (streams.length) {
+                    _this.activeStream = streams[0];
+                }
+                else {
+                    throw ({
+                        message: "Table " + _this.tableName + " can't have ACTIVE streams",
+                        code: StreamKnowingStatusCodes.Reader_EmptyActiveStream
+                    });
+                }
+            })
+                .then(_this.getShardIterator)
+                .then(function (shardIterator) {
+                _this.nextShardIterator = shardIterator.ShardIterator;
+                _this.intervalID = setInterval(function () { return _this.getAndParseStreamData().catch(_this.handleError); }, _this.interval);
             })
                 .catch(_this.handleError);
         };
+        this.handleError = function (e) {
+            clearInterval(_this.intervalID);
+            switch (e.code) {
+                case StreamKnowingStatusCodes.TrimmedDataAccessException:
+                case StreamKnowingStatusCodes.Reader_EmptyActiveStream:
+                case StreamKnowingStatusCodes.Reader_EmptyStreams:
+                case StreamKnowingStatusCodes.Reader_NextShardIteratorNotExist:
+                    {
+                        log("Restart Reader for table:" + _this.tableName);
+                        setTimeout(function () { return _this.start(); }, 1000);
+                    }
+                    break;
+                default: {
+                    console.error("- - - - E R R O R  (" + _this.tableName + ")- - - -");
+                    console.error("This is not knowing error, reader for " + _this.tableName + " will not restart");
+                    console.error('Message', e.message);
+                    console.trace(e);
+                }
+            }
+        };
+        this.activeStream = null;
+        this.dynamoStream = dynamoStream;
+        this.handlers = [];
+        this.interval = interval;
+        this.tableName = tableName;
+        this.start();
+    }
+    return ReadStream;
+}());
+var StreamReader = /** @class */ (function () {
+    function StreamReader(config) {
+        this.getTableName = function (event) { return event.arn['Fn::GetAtt'][0]; };
         var options = {
             accessKeyId: process.env.AWS_DYNAMODB_ACCESS_KEY,
             apiVersion: '2012-08-10',
             endpoint: process.env.AWS_DYNAMODB_ENDPOINT || 'http://localhost:8000',
-            region: process.env.REGION || 'us-east-1',
+            region: process.env.AWS_REGION || 'ddblocal',
             secretAccessKey: process.env.AWS_DYNAMODB_SECRET_ACCESS_KEY
         };
         this.dynamoStream = new aws_sdk_1.DynamoDBStreams(options);
-        this.events = {};
-        this.eventsRegistered = false;
+        this.events = [];
         this.interval = config.interval || 1000;
-        this.streams = [];
     }
     StreamReader.prototype.registerHandler = function (event, handler, functionName) {
         if ('dynamodb' !== event.type) {
             return;
         }
         var tableName = this.getTableName(event);
-        this.events[tableName] = this.events[tableName] || [];
-        this.events[tableName].push({ handler: handler, functionName: functionName, arn: event.arn });
-        this.eventsRegistered = true;
+        console.info("Register " + functionName + " lambda for " + tableName + " table streams");
+        this.events[tableName] = this.events[tableName] || new ReadStream(this.dynamoStream, this.interval, tableName);
+        this.events[tableName].addHandler({ handler: handler, functionName: functionName, arn: event.arn });
     };
-    StreamReader.prototype.connect = function () {
-        var _this = this;
-        if (!this.eventsRegistered) {
-            return;
-        }
-        log('- - - - S T A R T - - - -');
-        this.getAllStreams()
-            .then(this.getStreamsDescribes)
-            .then(this.filterStream)
-            .then(this.getShardIterators)
-            .then(this.saveShards)
-            .then(function () {
-            _this.intervalID = setInterval(function () { return _this.getStreamData(); }, _this.interval);
-        })
-            .catch(this.handleError);
-    };
-    StreamReader.getARNFromShardIterator = function (id) { return id.substring(id.indexOf('|') + 1, id.lastIndexOf('|')); };
     return StreamReader;
 }());
 exports.StreamReader = StreamReader;
