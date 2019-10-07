@@ -7,66 +7,36 @@ interface IStreamReaderConfig {
   interval: number;
 }
 
-interface IStreamRecord extends DynamoDBStreams.Types.GetRecordsOutput {
-  e?: any;
-  sourceARN?: string;
-}
-
 const log = debug('serverless-offline:streamReader');
 
-export class StreamReader {
-  private events: any;
-  private eventsRegistered: boolean;
+const StreamKnowingStatusCodes = {
+  Reader_EmptyStreams: 'Reader_EmptyStreams',
+  Reader_EmptyActiveStream: 'Reader_EmptyActiveStream',
+  Reader_NextShardIteratorNotExist: 'Reader_NextShardIteratorNotExist',
+  TrimmedDataAccessException: 'TrimmedDataAccessException'
+};
+
+class ReadStream {
+  private activeStream: DynamoDBStreams.Types.StreamDescription;
   private dynamoStream: DynamoDBStreams;
-  private streams: DynamoDBStreams.Types.Stream[];
-  private shards: DynamoDBStreams.Types.ShardIterator[];
-  private interval;
+  private readonly handlers;
+  private nextShardIterator: DynamoDBStreams.Types.ShardIterator;
+  private readonly interval;
   private intervalID;
+  private readonly tableName: string;
 
-  constructor(config: IStreamReaderConfig) {
-    const options: DynamoDBStreams.Types.ClientConfiguration = {
-      accessKeyId: process.env.AWS_DYNAMODB_ACCESS_KEY,
-      apiVersion: '2012-08-10',
-      endpoint: process.env.AWS_DYNAMODB_ENDPOINT || 'http://localhost:8000',
-      region: process.env.REGION || 'us-east-1',
-      secretAccessKey: process.env.AWS_DYNAMODB_SECRET_ACCESS_KEY
-    };
-    this.dynamoStream = new DynamoDBStreams(options);
-    this.events = {};
-    this.eventsRegistered = false;
-    this.interval = config.interval || 1000;
-    this.streams = [];
+  constructor(dynamoStream: DynamoDBStreams, interval: number, tableName: string) {
+    this.activeStream = null;
+    this.dynamoStream = dynamoStream;
+    this.handlers = [];
+    this.interval = interval;
+    this.tableName = tableName;
+    this.start();
   }
 
-  static getARNFromShardIterator = (id: string) => id.substring(id.indexOf('|') + 1, id.lastIndexOf('|'));
-
-  public registerHandler(event: any, handler: () => void, functionName: string) {
-    if ('dynamodb' !== event.type) {
-      return;
-    }
-    const tableName = this.getTableName(event);
-    this.events[tableName] = this.events[tableName] || [];
-    this.events[tableName].push({ handler, functionName, arn: event.arn });
-    this.eventsRegistered = true;
+  public addHandler = (event) => {
+    this.handlers.push(event);
   }
-
-  public connect() {
-    if (!this.eventsRegistered) {
-      return;
-    }
-    log('- - - - S T A R T - - - -');
-    this.getAllStreams()
-      .then(this.getStreamsDescribes)
-      .then(this.filterStream)
-      .then(this.getShardIterators)
-      .then(this.saveShards)
-      .then(() => {
-        this.intervalID = setInterval(() => this.getStreamData(), this.interval);
-      })
-      .catch(this.handleError);
-  }
-
-  private getTableName = event => event.arn['Fn::GetAtt'][0];
 
   private getTableStreams = TableName => {
     const getStreams = async (options: DynamoDBStreams.Types.ListStreamsInput) => {
@@ -80,113 +50,143 @@ export class StreamReader {
     return getStreams({ TableName });
   }
 
-  private getAllStreams = async () => {
-    this.streams = _.flatten(await Bluebird.map(_.keys(this.events), this.getTableStreams));
-    return Promise.resolve();
+  private getStreamsDescribes = (streams: DynamoDBStreams.Types.Stream[]): DynamoDBStreams.Types.StreamDescription[] => {
+    if (!streams.length) {
+      throw ({
+        message: `Expecting streams but dynamoDB returns empty streams table, could ${this.tableName} table has been created?`,
+        code: StreamKnowingStatusCodes.Reader_EmptyStreams
+      });
+    }
+    return Bluebird.map(streams, item => this.getDescribes({ StreamArn: item.StreamArn }));
   }
 
   private getDescribes = (params: DynamoDBStreams.Types.DescribeStreamInput): Promise<DynamoDBStreams.Types.StreamDescription> =>
     this.dynamoStream.describeStream(params).promise().then(res => res.StreamDescription)
 
-  private getStreamsDescribes = (): DynamoDBStreams.Types.StreamDescription[] => {
-    if (!this.streams.length) {
-      log('Expect streams but dynamoDB returns empty streams table');
-      return [];
-    }
-    return Bluebird.map(this.streams, item => this.getDescribes({ StreamArn: item.StreamArn }));
-  }
+  private filterStream = (streams: DynamoDBStreams.Types.StreamDescription[]) =>
+    _.filter(streams, { StreamStatus: 'ENABLED' })
 
-  private filterStream = (streams: DynamoDBStreams.Types.StreamDescription[]) => {
-    const tables = _.keys(this.events);
-    return _.filter(streams, item => 'ENABLED' === item.StreamStatus && tables.includes(item.TableName));
-  }
-
-  private getShardIterators = (data): Promise<DynamoDBStreams.Types.ShardIterator[]> => {
-    return Bluebird.map(data, (StreamDescription: DynamoDBStreams.Types.StreamDescription) => this.dynamoStream.getShardIterator({
-      ShardId: StreamDescription.Shards[0].ShardId,
+  private getShardIterator = (): Promise<any> =>
+    this.dynamoStream.getShardIterator({
+      ShardId: this.activeStream.Shards[0].ShardId,
       ShardIteratorType: 'TRIM_HORIZON',
-      StreamArn: StreamDescription.StreamArn
-    }).promise());
-  }
+      StreamArn: this.activeStream.StreamArn
+    }).promise()
 
-  private saveShards = (shards: DynamoDBStreams.Types.ShardIterator[]): void => {
-    this.shards = _.map(shards, shard => shard.ShardIterator);
-  }
+  private getAllRecords = (ShardIterator: DynamoDBStreams.Types.ShardIterator): Promise<DynamoDBStreams.Types.GetRecordsOutput> =>
+    this.dynamoStream.getRecords({ ShardIterator }).promise()
+      .then(data => ({ ...data, sourceARN: ShardIterator }))
 
-  private getAllRecords = (): Promise<DynamoDBStreams.Types.GetRecordsOutput[]> => {
-    const handleGetAllRecordsError = async (e: Error, ShardIterator: string) => {
-      log(`getAllRecords error: ${e}`);
-      log(`INVALID SHARD!', ${ShardIterator}`);
-      return { e, ShardIterator };
-    };
-    return Bluebird.map(this.shards, (ShardIterator: DynamoDBStreams.Types.ShardIterator) =>
-      this.dynamoStream.getRecords({ ShardIterator })
-        .promise().then(data => ({ ...data, sourceARN: ShardIterator }))
-        .catch((e: Error) => handleGetAllRecordsError(e, ShardIterator))
-    );
-  }
+  private parseStreamData = (StreamsData) => {
+    this.nextShardIterator = StreamsData.NextShardIterator || 'NotExist';
 
-  private parseStreamData = (StreamsData: IStreamRecord[]) => {
-    this.shards = _.map(StreamsData, (item: IStreamRecord) => item && item.NextShardIterator || null);
-    return Bluebird.map(StreamsData, (stream: IStreamRecord) => {
-      if (stream.e) {
-        return;
-      }
+    delete StreamsData.sourceARN;
 
-      const StreamArn = StreamReader.getARNFromShardIterator(stream.sourceARN);
-      delete stream.sourceARN;
-      const streamDefinition = _.find(this.streams, { StreamArn });
-
-      if (!stream || 0 === (stream.Records && stream.Records.length)) {
-        return `Stream for ${streamDefinition.TableName} not have records`;
-      }
-
-      log(`Call ${this.events[streamDefinition.TableName].length || 0} handlers for ${stream.Records.length} ` +
-        `items in ${streamDefinition.TableName} streams`);
-
-      stream.Records = _.map(stream.Records, (record: DynamoDBStreams.Types.Record) => ({
-        ...record,
-        TableName: streamDefinition.TableName,
-        eventSourceARN: streamDefinition.StreamArn
-      }));
-
-      return Bluebird.map(this.events[streamDefinition.TableName], ({ handler, functionName }) => new Promise(resolve =>
-        handler(stream, undefined, (err, success) => {
-            const status = err ? `error: ${err}` : `success: ${success}`;
-            resolve(`HANDLER ${functionName} for ${streamDefinition.TableName} END WORK with ${status}`);
-          }
-        )));
-    });
-  }
-
-  private checkShards = async () => {
-    if (-1 !== _.findIndex(this.shards, i => null === i)) {
-      throw new Error('Some Shards are invalid');
+    if (!StreamsData || 0 === (StreamsData.Records && StreamsData.Records.length)) {
+      return `Stream for ${this.tableName} not have records`;
     }
-    return;
+
+    log(`Call ${this.handlers.length || 0} handlers for ${StreamsData.Records.length} items in ${this.tableName} streams`);
+
+    StreamsData.Records = _.map(StreamsData.Records, (record: DynamoDBStreams.Types.Record) => ({
+      ...record,
+      TableName: this.tableName,
+      eventSourceARN: this.activeStream.StreamArn
+    }));
+
+    return Bluebird.map(this.handlers, ({ handler, functionName }) => new Promise(resolve =>
+      handler(StreamsData, undefined, (err, success) => {
+          const status = err ? `error: ${err}` : `success: ${success}`;
+          console.info(`HANDLER ${functionName} for ${this.tableName} END WORK with ${status}`);
+          resolve();
+        }
+      )));
+
   }
 
-  private handleError = (e: Error) => {
-    console.error('- - - - E R R O R - - - -');
-    console.error(e);
-    clearInterval(this.intervalID);
-    setTimeout(() => {
-      log('RESTART');
-      this.connect();
-    }, 1000);
-    this.streams = [];
-    this.shards = [];
-  }
-
-  private getStreamData = () => {
-    this.checkShards()
-      .then(this.getAllRecords)
+  private getAndParseStreamData = (): Promise<any> => {
+    if (this.nextShardIterator === 'NotExist') {
+      return Promise.reject({
+        message: 'nextShardIterator not exist',
+        code: StreamKnowingStatusCodes.Reader_NextShardIteratorNotExist
+      });
+    }
+    return this.getAllRecords(this.nextShardIterator)
       .then(this.parseStreamData)
-      .then(logs => {
-        log('- - - - L O G S - - - -');
-        log('\n', logs);
-        log('- - - - E  N  D - - - -');
+  }
+
+  private start = () => {
+    log(`- - - - S T A R T (${this.tableName})- - - -`);
+    this.getTableStreams(this.tableName)
+      .then(this.getStreamsDescribes)
+      .then(this.filterStream)
+      .then(streams => {
+        if (streams.length) {
+          this.activeStream = streams[0];
+        } else {
+          throw ({
+            message: `Table ${this.tableName} can't have ACTIVE streams`,
+            code: StreamKnowingStatusCodes.Reader_EmptyActiveStream
+          });
+        }
+      })
+      .then(this.getShardIterator)
+      .then((shardIterator) => {
+        this.nextShardIterator = shardIterator.ShardIterator;
+        this.intervalID = setInterval(() => this.getAndParseStreamData().catch(this.handleError), this.interval);
       })
       .catch(this.handleError);
   }
+
+  private handleError = (e) => {
+    clearInterval(this.intervalID);
+
+    switch(e.code){
+      case StreamKnowingStatusCodes.TrimmedDataAccessException:
+      case StreamKnowingStatusCodes.Reader_EmptyActiveStream:
+      case StreamKnowingStatusCodes.Reader_EmptyStreams:
+      case StreamKnowingStatusCodes.Reader_NextShardIteratorNotExist: {
+        log(`Restart Reader for table:${this.tableName}`);
+        setTimeout(() => this.start(), 1000);
+      }
+      break;
+      default: {
+        console.error(`- - - - E R R O R  (${this.tableName})- - - -`);
+        console.error(`This is not knowing error, reader for ${this.tableName} will not restart`);
+        console.error('Message', e.message);
+        console.trace(e);
+      }
+    }
+  }
+}
+
+export class StreamReader {
+  private dynamoStream: DynamoDBStreams;
+  private events: any;
+  private interval;
+
+  constructor(config: IStreamReaderConfig) {
+    const options: DynamoDBStreams.Types.ClientConfiguration = {
+      accessKeyId: process.env.AWS_DYNAMODB_ACCESS_KEY,
+      apiVersion: '2012-08-10',
+      endpoint: process.env.AWS_DYNAMODB_ENDPOINT || 'http://localhost:8000',
+      region: process.env.AWS_REGION || 'ddblocal',
+      secretAccessKey: process.env.AWS_DYNAMODB_SECRET_ACCESS_KEY
+    };
+    this.dynamoStream = new DynamoDBStreams(options);
+    this.events = [];
+    this.interval = config.interval || 1000;
+  }
+
+  public registerHandler(event: any, handler: () => void, functionName: string) {
+    if ('dynamodb' !== event.type) {
+      return;
+    }
+    const tableName = this.getTableName(event);
+    console.info(`Register ${functionName} lambda for ${tableName} table streams`);
+    this.events[tableName] = this.events[tableName] || new ReadStream(this.dynamoStream, this.interval, tableName);
+    this.events[tableName].addHandler({ handler, functionName, arn: event.arn });
+  }
+
+  private getTableName = event => event.arn['Fn::GetAtt'][0]
 }

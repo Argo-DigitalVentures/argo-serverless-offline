@@ -232,7 +232,6 @@ var startServer = function (_a) {
                         }
                     });
                     registerStreams(service);
-                    stream.connect();
                     registerSNSEvents(service);
                     registerSQSEvents(service);
                     registerAuthSchemes(service, server);

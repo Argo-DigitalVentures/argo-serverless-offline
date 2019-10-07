@@ -206,7 +206,6 @@ const startServer = async ({ service, port = 3000, host = 'localhost' }) => {
     }
   });
   registerStreams(service);
-  stream.connect();
   registerSNSEvents(service);
   registerSQSEvents(service);
   registerAuthSchemes(service, server);
