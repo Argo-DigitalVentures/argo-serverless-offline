@@ -53,6 +53,17 @@ var sns = new snsReader_1.SnsReader({ interval: Number(process.env.SNS_READER_IN
 var sqs = new sqsReader_1.SqsReader({ interval: Number(process.env.SQS_READER_INTERVAL) });
 var serverlessOptions = { stage: process.env.STAGE || 'ci' };
 var requireLambdaModule = function (modulePath) { return require(process.cwd() + "/" + modulePath); };
+var reduceFunctionArray = function (serviceFunctions) {
+    if (Array.isArray(serviceFunctions)) {
+        return serviceFunctions.reduce(function (functionsObject, functionItem) {
+            Object.keys(functionItem).forEach(function (key) {
+                functionsObject[key] = functionItem[key];
+            });
+            return functionsObject;
+        }, {});
+    }
+    return serviceFunctions;
+};
 var parseFunctionPath = function (path) {
     var handlerPathSegments = path.split('.');
     var functionName = handlerPathSegments[handlerPathSegments.length - 1];
@@ -70,8 +81,9 @@ var getHandler = function (descriptor) {
 };
 var registerAuthSchemes = function (service, server) {
     var authorizersMap = {};
-    Object.keys(service.functions).forEach(function (functionName) {
-        var descriptor = service.functions[functionName];
+    var serviceFunctions = reduceFunctionArray(service.functions);
+    Object.keys(serviceFunctions).forEach(function (functionName) {
+        var descriptor = serviceFunctions[functionName];
         if (!descriptor.events) {
             return;
         }
@@ -82,7 +94,7 @@ var registerAuthSchemes = function (service, server) {
         });
     });
     Object.keys(authorizersMap).forEach(function (functionName) {
-        var handler = getHandler(service.functions[functionName]);
+        var handler = getHandler(serviceFunctions[functionName]);
         var scheme = function () {
             var authorizerOptions = {
                 identitySource: 'method.request.header.Authorization',
@@ -97,8 +109,9 @@ var registerAuthSchemes = function (service, server) {
     });
 };
 var registerStreams = function (service) {
-    Object.keys(service.functions).forEach(function (functionName) {
-        var descriptor = service.functions[functionName];
+    var serviceFunctions = reduceFunctionArray(service.functions);
+    Object.keys(serviceFunctions).forEach(function (functionName) {
+        var descriptor = serviceFunctions[functionName];
         if (!descriptor.events) {
             return;
         }
@@ -111,8 +124,9 @@ var registerStreams = function (service) {
     });
 };
 var registerSNSEvents = function (service) {
-    Object.keys(service.functions).forEach(function (functionName) {
-        var descriptor = service.functions[functionName];
+    var serviceFunctions = reduceFunctionArray(service.functions);
+    Object.keys(serviceFunctions).forEach(function (functionName) {
+        var descriptor = serviceFunctions[functionName];
         if (!descriptor.events) {
             return;
         }
@@ -126,8 +140,9 @@ var registerSNSEvents = function (service) {
     });
 };
 var registerSQSEvents = function (service) {
-    Object.keys(service.functions).forEach(function (functionName) {
-        var descriptor = service.functions[functionName];
+    var serviceFunctions = reduceFunctionArray(service.functions);
+    Object.keys(serviceFunctions).forEach(function (functionName) {
+        var descriptor = serviceFunctions[functionName];
         if (descriptor.events && descriptor.events.length) {
             descriptor.events.forEach(function (event) { return event.sqs && sqs.registerHandler(event, getHandler(descriptor), functionName); });
         }
@@ -182,8 +197,9 @@ var wrapHandler = function (descriptor, handler) {
     };
 };
 var registerRoutes = function (service, server) {
-    Object.keys(service.functions).forEach(function (functionName) {
-        var descriptor = service.functions[functionName];
+    var serviceFunctions = reduceFunctionArray(service.functions);
+    Object.keys(serviceFunctions).forEach(function (functionName) {
+        var descriptor = serviceFunctions[functionName];
         descriptor.name = functionName;
         if (!descriptor.events) {
             return;
