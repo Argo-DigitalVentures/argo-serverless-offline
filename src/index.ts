@@ -19,6 +19,18 @@ const serverlessOptions = { stage: process.env.STAGE || 'ci' };
 
 const requireLambdaModule = modulePath => require(`${process.cwd()}/${modulePath}`);
 
+const reduceFunctionArray = (serviceFunctions) => {
+  if (Array.isArray(serviceFunctions)) {
+    return serviceFunctions.reduce((functionsObject, functionItem) => {
+      Object.keys(functionItem).forEach(key => {
+        functionsObject[key] = functionItem[key];
+      });
+      return functionsObject;
+    }, {});
+  }
+  return serviceFunctions;
+}
+
 const parseFunctionPath = path => {
   const handlerPathSegments = path.split('.');
   const functionName = handlerPathSegments[handlerPathSegments.length - 1];
@@ -38,8 +50,9 @@ const getHandler = descriptor => {
 
 const registerAuthSchemes = (service: any, server: Hapi.Server) => {
   const authorizersMap = {};
-  Object.keys(service.functions).forEach(functionName => {
-    const descriptor = service.functions[functionName];
+  const serviceFunctions = reduceFunctionArray(service.functions);
+  Object.keys(serviceFunctions).forEach(functionName => {
+    const descriptor = serviceFunctions[functionName];
     if (!descriptor.events) {
       return;
     }
@@ -50,7 +63,7 @@ const registerAuthSchemes = (service: any, server: Hapi.Server) => {
     });
   });
   Object.keys(authorizersMap).forEach(functionName => {
-    const handler = getHandler(service.functions[functionName]);
+    const handler = getHandler(serviceFunctions[functionName]);
     const scheme = () => {
       const authorizerOptions = {
         identitySource: 'method.request.header.Authorization',
@@ -67,8 +80,9 @@ const registerAuthSchemes = (service: any, server: Hapi.Server) => {
 };
 
 const registerStreams = (service: any) => {
-  Object.keys(service.functions).forEach(functionName => {
-    const descriptor = service.functions[functionName];
+  const serviceFunctions = reduceFunctionArray(service.functions);
+  Object.keys(serviceFunctions).forEach(functionName => {
+    const descriptor = serviceFunctions[functionName];
     if (!descriptor.events) {
       return;
     }
@@ -82,8 +96,9 @@ const registerStreams = (service: any) => {
 };
 
 const registerSNSEvents = (service: any) => {
-  Object.keys(service.functions).forEach(functionName => {
-    const descriptor = service.functions[functionName];
+  const serviceFunctions = reduceFunctionArray(service.functions);
+  Object.keys(serviceFunctions).forEach(functionName => {
+    const descriptor = serviceFunctions[functionName];
     if (!descriptor.events) {
       return;
     }
@@ -98,8 +113,9 @@ const registerSNSEvents = (service: any) => {
 };
 
 const registerSQSEvents = service => {
-  Object.keys(service.functions).forEach(functionName => {
-    const descriptor = service.functions[functionName];
+  const serviceFunctions = reduceFunctionArray(service.functions);
+  Object.keys(serviceFunctions).forEach(functionName => {
+    const descriptor = serviceFunctions[functionName];
     if (descriptor.events && descriptor.events.length) {
       descriptor.events.forEach(event => event.sqs && sqs.registerHandler(event, getHandler(descriptor), functionName));
     }
@@ -161,8 +177,9 @@ const wrapHandler = (descriptor, handler) => {
 };
 
 const registerRoutes = (service: any, server: Hapi.Server) => {
-  Object.keys(service.functions).forEach(functionName => {
-    const descriptor = service.functions[functionName];
+  const serviceFunctions = reduceFunctionArray(service.functions);
+  Object.keys(serviceFunctions).forEach(functionName => {
+    const descriptor = serviceFunctions[functionName];
     descriptor.name = functionName;
     if (!descriptor.events) {
       return;
